@@ -88,7 +88,7 @@ class MsGraph {
         if (body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
 
         const responseFormat = this.getNodeParameter('responseFormat', i, 'json');
-        const requestOptions = { method, url, headers, qs, body, json: responseFormat === 'json', resolveWithFullResponse: true };
+        const requestOptions = { method, url, headers, qs, body, json: responseFormat === 'json' };
 
         // Throttle retry
         const throttle = { enabled: true, delay: 2, maxRetries: 5 };
@@ -96,8 +96,7 @@ class MsGraph {
         let retryCount = 0;
         while (true) {
           try {
-            const fullResp = await this.helpers.request(requestOptions);
-            response = fullResp.body;
+            response = await this.helpers.request(requestOptions);
             break;
           } catch (error) {
             if (error.statusCode === 429 && throttle.enabled && retryCount < throttle.maxRetries) {

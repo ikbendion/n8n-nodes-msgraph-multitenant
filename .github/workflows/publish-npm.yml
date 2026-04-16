@@ -1,12 +1,13 @@
-name: Publish NPM Package
+name: CI
 
 on:
   push:
     branches:
       - main
+      - development
 
 jobs:
-  publish:
+  build:
     runs-on: ubuntu-latest
 
     steps:
@@ -26,6 +27,7 @@ jobs:
         run: npm run build
 
       - name: Publish to npm
+        if: github.ref == 'refs/heads/main'
         run: npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

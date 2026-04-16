@@ -21,6 +21,7 @@ class MsGraph {
         { displayName: 'Tenant ID', name: 'tenantId', type: 'string', default: '', placeholder: 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx', description: 'Azure AD Tenant (Directory) ID', required: true },
         { displayName: 'HTTP Method', name: 'method', type: 'options', options: ['GET','POST','PATCH','PUT','DELETE'].map(m => ({ name: m, value: m })), default: 'GET' },
         { displayName: 'URL', name: 'url', type: 'string', default: 'https://graph.microsoft.com/v1.0/me', placeholder: 'https://graph.microsoft.com/v1.0/users', description: 'Full Graph URL', required: true },
+        { displayName: 'Return All Pages', name: 'returnAll', type: 'boolean', default: false, description: 'Whether to follow @odata.nextLink and return all pages as individual items', displayOptions: { show: { method: ['GET'] } } },
         { displayName: 'Query Parameters', name: 'queryParameters', type: 'fixedCollection', placeholder: 'Add Parameter', typeOptions: { multipleValues: true }, options: [{ name: 'parameter', displayName: 'Parameter', values: [ { displayName: 'Name', name: 'name', type: 'string', default: '' }, { displayName: 'Value', name: 'value', type: 'string', default: '' } ] }], default: {} },
         { displayName: 'Body', name: 'body', type: 'json', displayOptions: { show: { method: ['POST','PATCH','PUT'] } }, default: '', description: 'JSON body' },
         { displayName: 'Response Format', name: 'responseFormat', type: 'options', options: [ { name: 'JSON', value: 'json' }, { name: 'String', value: 'string' } ], default: 'json' },
@@ -109,14 +110,27 @@ class MsGraph {
         if (body) headers['Content-Type'] = 'application/json';
 
         const responseFormat = this.getNodeParameter('responseFormat', i, 'json');
-        const requestOptions = { method, url, headers, qs, body, json: responseFormat === 'json' };
+        const returnAll = method === 'GET' ? this.getNodeParameter('returnAll', i, false) : false;
+        const requestOptions = { method, headers, qs, body, json: responseFormat === 'json' };
 
-        const response = await requestWithRetry(requestOptions);
-
-        let output = response;
-        if (responseFormat === 'string') output = typeof response === 'object' ? JSON.stringify(response) : String(response);
-
-        returnItems.push({ json: output });
+        if (returnAll) {
+          // Follow @odata.nextLink pages and emit one item per record
+          let nextUrl = url;
+          while (nextUrl) {
+            const page = await requestWithRetry({ ...requestOptions, url: nextUrl });
+            const values = Array.isArray(page.value) ? page.value : [page];
+            for (const value of values) {
+              const output = responseFormat === 'string' ? JSON.stringify(value) : value;
+              returnItems.push({ json: output });
+            }
+            nextUrl = page['@odata.nextLink'] || null;
+          }
+        } else {
+          const response = await requestWithRetry({ ...requestOptions, url });
+          let output = response;
+          if (responseFormat === 'string') output = typeof response === 'object' ? JSON.stringify(response) : String(response);
+          returnItems.push({ json: output });
+        }
       } catch (err) {
         if (this.continueOnFail()) {
           returnItems.push({ json: { error: err.message } });

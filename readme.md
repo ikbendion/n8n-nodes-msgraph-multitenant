@@ -1,49 +1,60 @@
-# Multi-Tenant Microsoft Graph Node for N8N
+# n8n-nodes-msgraph-multitenant
 
-This repository provides a custom N8N node for interacting with the Microsoft Graph API across **multiple tenants**, based on a fork of [`advenimuss-n8n-nodes-msgraph`](https://github.com/advenimus/n8n-nodes-msgraph). It extends the original node by allowing dynamic data retrieval from **many Microsoft tenants** using a **multi-tenant Azure app registration**.
+A community node for [n8n](https://n8n.io) that lets you call the **Microsoft Graph API across multiple Azure AD tenants** from a single workflow. Each item in a workflow can target a different tenant — useful for MSPs and multi-tenant SaaS platforms.
 
+Forked from [`advenimus/n8n-nodes-msgraph`](https://github.com/advenimus/n8n-nodes-msgraph).
 
-## ⚙️ Prerequisites
+## Installation
 
-Before you begin, you’ll need:
+In your n8n instance, go to **Settings > Community Nodes** and install:
 
-- An [Azure AD multi-tenant app](https://learn.microsoft.com/en-us/azure/active-directory/develop/howto-convert-app-to-be-multi-tenant)
-- Appropriate Microsoft Graph API permissions
-- An N8N instance
+```
+n8n-nodes-msgraph-multitenant
+```
 
-## 🔐 Setting Up a Multi-Tenant App in Azure
+## Prerequisites
 
-To configure your Azure AD app for multi-tenant access:
+- A **multi-tenant Azure AD app registration** ([how to create one](https://learn.microsoft.com/en-us/azure/active-directory/develop/howto-convert-app-to-be-multi-tenant))
+- The app granted the required Microsoft Graph API permissions with **admin consent** from each tenant
+- A **client secret** for the app
 
-1. Log in to the [Azure Portal](https://portal.azure.com).
-2. Navigate to **Azure Active Directory** > **App registrations**.
-3. Click **New registration**.
-4. Set the **Supported account types** to:  
-   > ✅ *Accounts in any organizational directory (Any Azure AD directory - Multitenant)*
-5. After registration:
-   - Copy the **Application (client) ID**
-   - Copy the **Directory (tenant) ID**
-6. Go to **Certificates & secrets** and:
-   - Create a **client secret** or upload a **certificate** for authentication.
-7. In **API permissions**, add the required Microsoft Graph permissions (e.g., `User.Read.All`, `Group.Read.All`) and **grant admin consent**.
-8. Share the **consent URL** with each tenant admin so they can authorize your app.
+## Azure App Setup
 
+1. Go to [portal.azure.com](https://portal.azure.com) > **Azure Active Directory** > **App registrations** > **New registration**
+2. Set **Supported account types** to *Accounts in any organizational directory (Multitenant)*
+3. Copy the **Application (client) ID**
+4. Under **Certificates & secrets**, create a **client secret** and copy its value
+5. Under **API permissions**, add the Graph permissions your workflows need (e.g. `User.Read.All`, `Mail.Send`) and grant admin consent
+6. Share the consent URL with each tenant admin so they can authorize your app in their directory
 
-## 🚀 Basic Usage
+## Credentials
 
-1. **Install the NPM package** in your N8N instance using your preferred method (e.g., cloning the repo into your custom nodes directory).
-2. **Restart N8N** to load the new node.
-3. **Add the Microsoft Graph (Multi-Tenant)** node to your workflow.
-4. **Provide a Tenant ID**:
-   - Dynamically using expressions or looping over a list of tenant IDs.
-   - Or statically by hardcoding a single tenant ID if only one is required.
-5. **Configure the desired action** (e.g., list users, get groups, send email).
-6. **Execute the workflow** to fetch data from the Microsoft Graph API.
+Create a **Microsoft Graph Multi-Tenant** credential in n8n with:
 
-## 📄 License
+| Field | Value |
+|---|---|
+| Client ID | Application (client) ID from the app registration |
+| Client Secret | Secret value created above |
 
-This project is licensed under the **MIT License**.
+No redirect URI or OAuth flow is required — the node uses the **client credentials** grant.
 
-It is a fork of the original [advenimus/n8n-nodes-msgraph](https://github.com/advenimus/n8n-nodes-msgraph) project and includes modifications to support multi-tenant Microsoft Graph access in N8N.
+## Usage
 
-See the [LICENSE](./LICENSE) file for full license details.
+Add the **Microsoft Graph Multi-Tenant** node to your workflow and configure:
+
+| Parameter | Description |
+|---|---|
+| Tenant ID | Azure AD tenant (directory) ID for the target organization |
+| HTTP Method | GET, POST, PATCH, PUT, or DELETE |
+| URL | Full Graph API URL, e.g. `https://graph.microsoft.com/v1.0/users` |
+| Query Parameters | Optional key/value pairs appended to the URL |
+| Body | JSON body for POST/PATCH/PUT requests |
+| Response Format | JSON (default) or string |
+
+The **Tenant ID** field supports n8n expressions, so you can loop over a list of tenant IDs and call Graph for each one in a single workflow execution. Tokens are cached per tenant within a single execution to avoid redundant auth requests.
+
+**Throttling:** the node automatically retries on HTTP 429 responses, respecting the `Retry-After` header returned by Microsoft Graph (up to 5 retries).
+
+## License
+
+MIT — see [LICENSE](./LICENSE).

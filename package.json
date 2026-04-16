@@ -2,15 +2,19 @@
   "name": "n8n-nodes-msgraph-multitenant",
   "version": "0.1.7",
   "type": "commonjs",
-  "description": "n8n node for consuming Microsoft Graph API, with mutlitenant capabilities",
+  "description": "n8n community node for calling the Microsoft Graph API across multiple Azure AD tenants",
   "keywords": [
     "n8n-community-node-package",
     "n8n",
     "microsoft",
     "graph",
     "msgraph",
+    "azure",
+    "azure-ad",
     "multi-tenant",
-    "mt"
+    "multitenant",
+    "office365",
+    "microsoft365"
   ],
   "license": "MIT",
   "homepage": "https://stream8.nl",

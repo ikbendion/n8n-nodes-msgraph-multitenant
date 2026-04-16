@@ -102,6 +102,7 @@ class MsGraph {
           } catch (error) {
             if (error.statusCode === 429 && throttle.enabled && retryCount < throttle.maxRetries) {
               retryCount++;
+              const retryAfter = parseInt(error.response?.headers?.['retry-after'] || throttle.delay, 10);
               await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
               continue;
             }

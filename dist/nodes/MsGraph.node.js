@@ -61,8 +61,10 @@ class MsGraph {
       try {
         const tenantId = this.getNodeParameter('tenantId', i);
 
-        // Fetch or reuse token for this tenant
-        let accessToken = tokenCache[tenantId];
+        // Fetch or reuse token; re-fetch if within 60s of expiry
+        const now = Date.now();
+        const cached = tokenCache[tenantId];
+        let accessToken = cached && cached.expiresAt > now + 60000 ? cached.token : null;
         if (!accessToken) {
           const tokenUrl = `https://login.microsoftonline.com/${tenantId}/oauth2/token`;
           const params = new URLSearchParams();
@@ -83,7 +85,8 @@ class MsGraph {
             throw new Error(`Failed to retrieve access token for tenant ${tenantId}`);
           }
           accessToken = tokenResponse.access_token;
-          tokenCache[tenantId] = accessToken;
+          const expiresIn = parseInt(tokenResponse.expires_in || '3600', 10);
+          tokenCache[tenantId] = { token: accessToken, expiresAt: now + expiresIn * 1000 };
         }
 
         // Build request parameters

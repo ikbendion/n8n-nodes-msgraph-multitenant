@@ -21,6 +21,7 @@ class MsGraph {
         { displayName: 'Tenant ID', name: 'tenantId', type: 'string', default: '', placeholder: 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx', description: 'Azure AD Tenant (Directory) ID', required: true },
         { displayName: 'HTTP Method', name: 'method', type: 'options', options: ['GET','POST','PATCH','PUT','DELETE'].map(m => ({ name: m, value: m })), default: 'GET' },
         { displayName: 'URL', name: 'url', type: 'string', default: 'https://graph.microsoft.com/v1.0/me', placeholder: 'https://graph.microsoft.com/v1.0/users', description: 'Full Graph URL', required: true },
+        { displayName: 'Return All Pages', name: 'returnAll', type: 'boolean', default: false, description: 'Whether to follow @odata.nextLink and return all pages as individual items', displayOptions: { show: { method: ['GET'] } } },
         { displayName: 'Query Parameters', name: 'queryParameters', type: 'fixedCollection', placeholder: 'Add Parameter', typeOptions: { multipleValues: true }, options: [{ name: 'parameter', displayName: 'Parameter', values: [ { displayName: 'Name', name: 'name', type: 'string', default: '' }, { displayName: 'Value', name: 'value', type: 'string', default: '' } ] }], default: {} },
         { displayName: 'Body', name: 'body', type: 'json', displayOptions: { show: { method: ['POST','PATCH','PUT'] } }, default: '', description: 'JSON body' },
         { displayName: 'Response Format', name: 'responseFormat', type: 'options', options: [ { name: 'JSON', value: 'json' }, { name: 'String', value: 'string' } ], default: 'json' },
@@ -33,19 +34,39 @@ class MsGraph {
     const returnItems = [];
     const tokenCache = {};
 
-    // Load client credentials once
     const oauthCreds = await this.getCredentials('msGraphOAuth2Api');
     const clientId = oauthCreds.clientId || oauthCreds.client_id;
     const clientSecret = oauthCreds.clientSecret || oauthCreds.client_secret;
+
+    // Shared retry logic for both token fetches and Graph API calls (429/503)
+    const requestWithRetry = async (options, maxRetries = 5) => {
+      let retryCount = 0;
+      while (true) {
+        try {
+          return await this.helpers.request(options);
+        } catch (error) {
+          if ((error.statusCode === 429 || error.statusCode === 503) && retryCount < maxRetries) {
+            retryCount++;
+            const retryAfterHeader = parseInt(error.response?.headers?.['retry-after'] || '0', 10);
+            // Respect Retry-After header when present; otherwise exponential backoff (2s, 4s, 8s… capped at 60s)
+            const delay = retryAfterHeader > 0 ? retryAfterHeader : Math.min(2 * Math.pow(2, retryCount - 1), 60);
+            await new Promise(resolve => setTimeout(resolve, delay * 1000));
+            continue;
+          }
+          throw error;
+        }
+      }
+    };
 
     for (let i = 0; i < items.length; i++) {
       try {
         const tenantId = this.getNodeParameter('tenantId', i);
 
-        // Fetch or reuse token for this tenant inline
-        let accessToken = tokenCache[tenantId];
+        // Fetch or reuse token; re-fetch if within 60s of expiry
+        const now = Date.now();
+        const cached = tokenCache[tenantId];
+        let accessToken = cached && cached.expiresAt > now + 60000 ? cached.token : null;
         if (!accessToken) {
-          // Inline getAccessTokenForTenant
           const tokenUrl = `https://login.microsoftonline.com/${tenantId}/oauth2/token`;
           const params = new URLSearchParams();
           params.append('grant_type', 'client_credentials');
@@ -53,7 +74,7 @@ class MsGraph {
           params.append('client_secret', clientSecret);
           params.append('resource', 'https://graph.microsoft.com');
 
-          const tokenResponse = await this.helpers.request({
+          const tokenResponse = await requestWithRetry({
             method: 'POST',
             url: tokenUrl,
             body: params.toString(),
@@ -65,7 +86,8 @@ class MsGraph {
             throw new Error(`Failed to retrieve access token for tenant ${tenantId}`);
           }
           accessToken = tokenResponse.access_token;
-          tokenCache[tenantId] = accessToken;
+          const expiresIn = parseInt(tokenResponse.expires_in || '3600', 10);
+          tokenCache[tenantId] = { token: accessToken, expiresAt: now + expiresIn * 1000 };
         }
 
         // Build request parameters
@@ -85,34 +107,30 @@ class MsGraph {
         }
 
         const headers = { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' };
-        if (body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
+        if (body) headers['Content-Type'] = 'application/json';
 
         const responseFormat = this.getNodeParameter('responseFormat', i, 'json');
-        const requestOptions = { method, url, headers, qs, body, json: responseFormat === 'json', resolveWithFullResponse: true };
+        const returnAll = method === 'GET' ? this.getNodeParameter('returnAll', i, false) : false;
+        const requestOptions = { method, headers, qs, body, json: responseFormat === 'json' };
 
-        // Throttle retry
-        const throttle = { enabled: true, delay: 2, maxRetries: 5 };
-        let response;
-        let retryCount = 0;
-        while (true) {
-          try {
-            const fullResp = await this.helpers.request(requestOptions);
-            response = fullResp.body;
-            break;
-          } catch (error) {
-            if (error.statusCode === 429 && throttle.enabled && retryCount < throttle.maxRetries) {
-              retryCount++;
-              await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
-              continue;
+        if (returnAll) {
+          // Follow @odata.nextLink pages and emit one item per record
+          let nextUrl = url;
+          while (nextUrl) {
+            const page = await requestWithRetry({ ...requestOptions, url: nextUrl });
+            const values = Array.isArray(page.value) ? page.value : [page];
+            for (const value of values) {
+              const output = responseFormat === 'string' ? JSON.stringify(value) : value;
+              returnItems.push({ json: output });
             }
-            throw error;
+            nextUrl = page['@odata.nextLink'] || null;
           }
+        } else {
+          const response = await requestWithRetry({ ...requestOptions, url });
+          let output = response;
+          if (responseFormat === 'string') output = typeof response === 'object' ? JSON.stringify(response) : String(response);
+          returnItems.push({ json: output });
         }
-
-        let output = response;
-        if (responseFormat === 'string') output = typeof response === 'object' ? JSON.stringify(response) : String(response);
-
-        returnItems.push({ json: output });
       } catch (err) {
         if (this.continueOnFail()) {
           returnItems.push({ json: { error: err.message } });

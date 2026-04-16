@@ -33,19 +33,37 @@ class MsGraph {
     const returnItems = [];
     const tokenCache = {};
 
-    // Load client credentials once
     const oauthCreds = await this.getCredentials('msGraphOAuth2Api');
     const clientId = oauthCreds.clientId || oauthCreds.client_id;
     const clientSecret = oauthCreds.clientSecret || oauthCreds.client_secret;
+
+    // Shared retry logic for both token fetches and Graph API calls (429/503)
+    const requestWithRetry = async (options, maxRetries = 5) => {
+      let retryCount = 0;
+      while (true) {
+        try {
+          return await this.helpers.request(options);
+        } catch (error) {
+          if ((error.statusCode === 429 || error.statusCode === 503) && retryCount < maxRetries) {
+            retryCount++;
+            const retryAfterHeader = parseInt(error.response?.headers?.['retry-after'] || '0', 10);
+            // Respect Retry-After header when present; otherwise exponential backoff (2s, 4s, 8s… capped at 60s)
+            const delay = retryAfterHeader > 0 ? retryAfterHeader : Math.min(2 * Math.pow(2, retryCount - 1), 60);
+            await new Promise(resolve => setTimeout(resolve, delay * 1000));
+            continue;
+          }
+          throw error;
+        }
+      }
+    };
 
     for (let i = 0; i < items.length; i++) {
       try {
         const tenantId = this.getNodeParameter('tenantId', i);
 
-        // Fetch or reuse token for this tenant inline
+        // Fetch or reuse token for this tenant
         let accessToken = tokenCache[tenantId];
         if (!accessToken) {
-          // Inline getAccessTokenForTenant
           const tokenUrl = `https://login.microsoftonline.com/${tenantId}/oauth2/token`;
           const params = new URLSearchParams();
           params.append('grant_type', 'client_credentials');
@@ -53,7 +71,7 @@ class MsGraph {
           params.append('client_secret', clientSecret);
           params.append('resource', 'https://graph.microsoft.com');
 
-          const tokenResponse = await this.helpers.request({
+          const tokenResponse = await requestWithRetry({
             method: 'POST',
             url: tokenUrl,
             body: params.toString(),
@@ -85,29 +103,12 @@ class MsGraph {
         }
 
         const headers = { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' };
-        if (body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
+        if (body) headers['Content-Type'] = 'application/json';
 
         const responseFormat = this.getNodeParameter('responseFormat', i, 'json');
         const requestOptions = { method, url, headers, qs, body, json: responseFormat === 'json' };
 
-        // Throttle retry
-        const throttle = { enabled: true, delay: 2, maxRetries: 5 };
-        let response;
-        let retryCount = 0;
-        while (true) {
-          try {
-            response = await this.helpers.request(requestOptions);
-            break;
-          } catch (error) {
-            if (error.statusCode === 429 && throttle.enabled && retryCount < throttle.maxRetries) {
-              retryCount++;
-              const retryAfter = parseInt(error.response?.headers?.['retry-after'] || throttle.delay, 10);
-              await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
-              continue;
-            }
-            throw error;
-          }
-        }
+        const response = await requestWithRetry(requestOptions);
 
         let output = response;
         if (responseFormat === 'string') output = typeof response === 'object' ? JSON.stringify(response) : String(response);
